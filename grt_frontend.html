@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <link rel="stylesheet" type="text/css" href="styles.css">
+    <link rel="icon" href="https://cryptologos.cc/logos/the-graph-grt-logo.png" type="image/png">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/moment.js/2.29.1/moment.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * {
+          box-sizing: border-box;
+        }
+    
+        body {
+          font-family: 'Arial', sans-serif;
+          margin: 0;
+          padding: 0;
+          background-color: #f3f3f3;
+          color: #333;
+        }
+    
+        .container {
+          width: 90%;
+          max-width: 1200px;
+          margin: 0 auto;
+          padding: 20px;
+        }
+    
+        h1 {
+          font-size: 2.5em;
+          color: #444;
+          margin-bottom: 20px;
+          text-align: center;
+          padding: 20px;
+        }
+    
+        p {
+          line-height: 1.6;
+          margin-bottom: 10px;
+          font-size: 1.1em;
+        }
+    
+        a {
+          color: #0066cc;
+          text-decoration: none;
+        }
+    
+        a:hover {
+          color: #004999;
+        }
+    
+        ul {
+          list-style-type: none;
+          padding: 0;
+        }
+    
+        ul li {
+          padding: 10px 0;
+        }
+    
+        .grid-container {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          grid-gap: 20px;
+        }
+    
+        .grid-item {
+          background: #fff;
+          border-radius: 8px;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 1px 2px rgba(0, 0, 0, 0.24);
+          padding: 20px;
+        }
+    
+        .grid-item canvas {
+          width: 100%;
+          max-height: 400px;
+        }
+    
+        .grid-item-full {
+          grid-column: 1 / span 2;
+        }
+    
+        @media (max-width: 768px) {
+          .grid-container {
+            grid-template-columns: 1fr;
+          }
+    
+          .grid-item-full {
+            grid-column: 1;
+          }
+        }
+      </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Welcome to the BTC.b Mint/Burn Data Portal</h1>
+        <p>
+        This platform presents a visualization of data regarding BTC.b's mint and burn events on the Avalanche BTC bridge since the end of July. BTC.b represents Bitcoin on the Avalanche network and these tokens are predominantly utilized in Avalanche's lending markets, including Aave and Benqi Finance. The data displayed here are generated from a subgraph that I have personally created and maintained, named the btc.b subgraph.
+        </p>
+        <p>
+        Please note, the data you see on this dashboard is currently being pulled from a test version of the subgraph as it has not yet been indexed by a graph indexer.
+        </p>
+        <p>
+        Three charts offer a detailed overview of the BTC.b activities: the <strong>Hourly Total Mint Volume</strong> illustrates the total volume of BTC.b minted per hour, the <strong>Hourly Total Unwrap Volume</strong> shows the volume of BTC.b unwrapped every hour, and the <strong>Hourly Net Mint Volume</strong> represents the difference between the total mint and unwrap volumes. All these data are aggregated on an hourly basis, providing an extensive and up-to-date overview of the lending activities related to BTC.b.
+        </p>
+
+        <h1>Links</h1>
+        <ul>
+            <li><a href="https://thegraph.com/explorer/subgraphs/GLjeXYAFiVhFzdoaRBp7hvfDy1Pi2FjACvxVyqmpL2k8?view=Playground&chain=arbitrum-one">Subgraph</a></li>
+            <li><a href="https://github.com/jms1192/graph_BTCb_projects">Project github</a></li>
+            <li><a href="https://twitter.com/jackthepine">My twitter</a></li>
+        </ul>
+
+        <h1>BTC.b Mint/Burn Data</h1>
+        <div class="grid-container">
+          <div class="grid-item">
+            <canvas id="myChart"></canvas>
+            <p id="mintsInfo"></p>
+          </div>
+          <div class="grid-item">
+            <canvas id="mySecondChart"></canvas>
+            <p id="unwrapsInfo"></p>
+          </div>
+          <div class="grid-item grid-item-full">
+            <canvas id="myThirdChart"></canvas>
+            <p id="netMintVolumeInfo"></p>
+          </div>
+        </div> 
+    </div>
+
+  <script>
+    const fetchAllData = async (queryFunc, data = [], skip = 0) => {
+      const response = await queryFunc(skip);
+      const newData = data.concat(response);
+
+      return response.length < 100 ? newData : fetchAllData(queryFunc, newData, skip + 100);
+    };
+
+    const query = (skip, queryText) => {
+      return fetch('https://api.studio.thegraph.com/query/50344/btcb/version/latest', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ query: queryText(skip) }),
+      })
+      .then(response => response.json())
+      .then(result => result.data);
+    };
+
+    const mintsQuery = (skip) => `
+    {
+      mints(first: 100, skip: ${skip}, where: {blockTimestamp_gt: "1690825757"}) {
+        id
+        amount
+        blockTimestamp
+      }
+    }`;
+
+    const unwrapsQuery = (skip) => `
+    {
+      unwraps(first: 100, skip: ${skip}, where: {blockTimestamp_gt: "1690825757"}) {
+        id
+        amount
+        blockTimestamp
+      }
+    }`;
+
+    const processData = (data) => {
+      data.sort((a, b) => parseInt(a.blockTimestamp) - parseInt(b.blockTimestamp));
+
+      const hourlyTotalVolume = {};
+      let cumulativeVolume = 0;
+      const cumulativeData = {};
+
+      for (let item of data) {
+        const date = moment.unix(item.blockTimestamp).startOf('hour').format('YYYY-MM-DD HH');
+        if (!hourlyTotalVolume[date]) hourlyTotalVolume[date] = 0;
+
+        const amount = Number(item.amount) / Math.pow(10, 8);
+        hourlyTotalVolume[date] += amount;
+        cumulativeVolume += amount;
+        cumulativeData[date] = cumulativeVolume;
+      }
+
+      return { hourly: hourlyTotalVolume, cumulative: cumulativeData, count: data.length, total: cumulativeVolume };
+    };
+
+    const calculateNetMintVolume = (mints, unwraps) => {
+      const netMintVolume = {};
+      let total = 0;
+
+      const allDates = new Set([...Object.keys(mints.hourly), ...Object.keys(unwraps.hourly)]);
+      for (let date of allDates) {
+        netMintVolume[date] = (mints.hourly[date] || 0) - (unwraps.hourly[date] || 0);
+        total += netMintVolume[date];
+      }
+
+      return { hourly: netMintVolume, count: Object.keys(netMintVolume).length, total: total };
+    };
+
+    const createChart = (elementId, labels, dataValues, label, color) => {
+      const ctx = document.getElementById(elementId).getContext('2d');
+      new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels: labels,
+          datasets: [{
+            label: label,
+            data: dataValues,
+            backgroundColor: `rgba(${color}, 0.2)`,
+            borderColor: `rgba(${color}, 1)`,
+            borderWidth: 1
+          }]
+        },
+        options: {
+          responsive: true,
+          scales: {
+            xAxes: [{
+              type: 'time',
+              time: {
+                unit: 'hour'
+              }
+            }],
+            yAxes: [{
+              ticks: {
+                beginAtZero: true
+              }
+            }]
+          }
+        }
+      });
+    };
+
+    Promise.all([
+      fetchAllData((skip) => query(skip, mintsQuery).then(response => response.mints)),
+      fetchAllData((skip) => query(skip, unwrapsQuery).then(response => response.unwraps))
+    ])
+    .then(([mintsData, unwrapsData]) => {
+      const mints = processData(mintsData);
+      const unwraps = processData(unwrapsData);
+      const netMintVolume = calculateNetMintVolume(mints, unwraps);
+
+      document.getElementById('mintsInfo').textContent = `Total Mint Events: ${mints.count}, Total Mint Value: ${mints.total.toFixed(2)} BTC.b`;
+      document.getElementById('unwrapsInfo').textContent = `Total Unwrap Events: ${unwraps.count}, Total Unwrap Value: ${unwraps.total.toFixed(2)} BTC.b`;
+      document.getElementById('netMintVolumeInfo').textContent = `Total Net Mint Value: ${netMintVolume.total.toFixed(2)} BTC.b`;
+
+      createChart('myChart', Object.keys(mints.hourly), Object.values(mints.hourly), 'Hourly Total Mint Volume (BTC.b)', '247, 147, 26');
+      createChart('mySecondChart', Object.keys(unwraps.hourly), Object.values(unwraps.hourly), 'Hourly Total Unwrap Volume (BTC.b)', '232, 65, 66');
+      createChart('myThirdChart', Object.keys(netMintVolume.hourly), Object.values(netMintVolume.hourly), 'Hourly Net Mint Volume (BTC.b)', '0, 0, 0');
+    })
+    .catch(error => console.error('Error:', error));
+  </script>
+</body>
+</html>
